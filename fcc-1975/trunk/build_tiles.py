@@ -6,34 +6,49 @@ Create: 2015-07-21 17:32:47
 Description:
 '''
 
-def tiles(level, ext=None):
-	import math
-	import geo_base_c as gb
+class tiles:
 
-	_b = 6378137.0
-	_s = 256
-	_p = _b * math.pi
-	_r = (2 * _p) / (2 ** level)
-	_c = _r / _s
+	def __init__(self):
+		import math
+		import geo_raster_c as ge
 
-	import geo_raster_c as ge
-	_prj = ge.proj_from_epsg(3857)
+		self.b = 6378137.0
+		self.s = 256
+		self.p = self.b * math.pi
 
-	_rows = 2 ** level
-	_cols = 2 ** level
+		self.prj = ge.proj_from_epsg(3857)
 
-	_num = -1
-	for _row in xrange(_rows):
-		for _col in xrange(_cols):
-			_num += 1
+	def list(self, level, ext=None):
+		import geo_base_c as gb
 
-			_x = -_p + (_col * _r)
-			_y = -_p + (_row * _r)
+		_r = (2 * self.p) / (2 ** level)
 
-			_ext = gb.geo_extent(_x, _y, _x + _r, _y + _r, _prj)
-			if ext == None or _ext.is_intersect(ext):
-				_geo = [_x, _c, 0, _y + _r, 0, -_c]
-				yield level, _num, _col, _row, ge.geo_raster_info(_geo, _s, _s, _prj)
+		_rows = 2 ** level
+		_cols = 2 ** level
+
+		_num = -1
+		for _row in xrange(_rows):
+			for _col in xrange(_cols):
+				_num += 1
+
+				_x = -self.p + (_col * _r)
+				_y = -self.p + (_row * _r)
+
+				_ext = gb.geo_extent(_x, _y, _x + _r, _y + _r, self.prj)
+				if ext == None or _ext.is_intersect(ext):
+					yield level, _num, _col, _row
+
+	def extent(self, level, col, row):
+		_r = (2 * self.p) / (2 ** level)
+		_c = _r / self.s
+
+		_x = -self.p + (col * _r)
+		_y = -self.p + (row * _r)
+
+		_geo = [_x, _c, 0, _y + _r, 0, -_c]
+
+		import geo_raster_c as ge
+		return ge.geo_raster_info(_geo, self.s, self.s, self.prj)
 
 def load_shp(f):
 	from osgeo import ogr
@@ -76,7 +91,7 @@ class band:
 	def __init__(self, f, fzip):
 		if f.endswith('.shp'):
 			import geo_raster_ex_c as gx
-			self.bnd = [gx.geo_band_stack_zip(f, file_unzip=fzip)]
+			self.bnd = [gx.geo_band_stack_zip.from_shapefile(f, file_unzip=fzip)]
 		else:
 			import geo_raster_c as ge
 			_img = ge.open(fzip.unzip(f))
@@ -105,10 +120,31 @@ class band:
 		import png
 		png.from_array(_dat, 'RGBA').save(f)
 
-	def read(self, bnd, f_out):
+	def _load_color(self, f):
+		import re
+
+		_cs = {}
+		with open(f) as _fi:
+			for _l in _fi.read().splitlines():
+				_vs = re.split('\s+', _l.strip())
+				if len(_vs) < 2:
+					continue
+
+				_cc = list(map(int, re.split('\s*,\s*', _vs[1])))
+				if len(_cc) == 3:
+					_cc.append(255)
+
+				_cs[int(_vs[0])] = _cc
+
+		return _cs
+
+	def make(self, bnd, f_clr, f_out):
 		if len(self.bnd) == 1:
 			_bnd = self.bnd[0].read_block(bnd)
-			self._save(_bnd, self._color(self.color), f_out)
+			if _bnd == None:
+				return
+
+			self._save(_bnd, self._load_color(f_clr) if f_clr else self._color(self.color), f_out)
 			# _bnd.save(f_out, driver='GTIFF', color_table=self.color)
 		else:
 			from osgeo import gdal
@@ -120,27 +156,66 @@ class band:
 
 			_img.flush()
 
-def main():
-	_opts = _init_env()
-
-	_level = 10
-
+def make_tile(f, lev, num, col, row, f_clr, d_out):
 	import file_unzip
 	import os
 
 	with file_unzip.file_unzip() as _zip:
-		_ext = load_shp(_opts.input) if _opts.input.endswith('.shp') else load_img(_opts.input, _zip)
-		_img = band(_opts.input, _zip)
+		_d = os.path.join(d_out, str(lev), str(col))
+		try:
+			os.path.exists(_d) or os.makedirs(_d)
+		except Exception:
+			pass
 
-		for _lev, _num, _col, _row, _bnd in tiles(_level, _ext):
-			_d = os.path.join(_opts.output, str(_lev), str(_col))
-			try:
-				os.path.exists(_d) or os.makedirs(_d)
-			except Exception:
-				pass
+		_f = os.path.join(_d, '%s.png' % row)
+		if os.path.exists(_f) and os.path.getsize(_f) > 0:
+			return
 
-			_f = os.path.join(_d, '%s.png' % _row)
-			_img.read(_bnd, _f)
+		band(f, _zip).make(tiles().extent(lev, col, row), f_clr, _f)
+
+def main():
+	_opts = _init_env()
+
+	_f_inp = _opts.input
+	_d_out = _opts.output
+	_f_clr = _opts.color
+
+	import config
+	import os
+
+	os.path.exists(_d_out) or os.makedirs(_d_out)
+
+	import file_unzip
+	with file_unzip.file_unzip() as _zip:
+		# detect the extent of input file
+		_ext = load_shp(_f_inp) if _opts.input.endswith('.shp') else load_img(_f_inp, _zip)
+		print 'detected extent', _ext
+
+		_ps = []
+		for _lev in xrange(_opts.levels[0], _opts.levels[1]+1):
+			print ' - checking level', _lev
+			for _lev, _num, _col, _row in tiles().list(_lev, _ext):
+				_ps.append((_f_inp, _lev, _num, _col, _row, _f_clr, _d_out))
+
+		print 'found %s tasks' % len(_ps)
+
+		import multi_task
+		multi_task.Pool(make_tile,
+				[_ps[i] for i in xrange(_opts.instance_pos, len(_ps), _opts.instance_num)],
+				_opts.task_num, False).run()
+
+		import geo_raster_c as ge
+		_ext_geo = _ext.to_polygon().segment_ratio(30).project_to(ge.proj_from_epsg()).extent()
+
+		print 'write map.html'
+		_f_out = os.path.join(_d_out, 'map.html')
+		with open(config.cfg.get('conf', 'openlayers_temp'), 'r') as _fi, open(_f_out, 'w') as _fo:
+			_fo.write(_fi.read() % {
+					'title': os.path.basename(_f_inp),
+					'xmin': _ext_geo.minx, 'xmax': _ext_geo.maxx,
+					'ymin': _ext_geo.miny, 'ymax': _ext_geo.maxy,
+					'zmin': _opts.levels[0], 'zmax': _opts.levels[1]
+					})
 
 def _usage():
 	import argparse
@@ -152,6 +227,11 @@ def _usage():
 
 	_p.add_argument('-i', '--input', dest='input', required=True)
 	_p.add_argument('-o', '--output', dest='output', required=True)
+	_p.add_argument('-c', '--color', dest='color')
+	_p.add_argument('-l', '--levels', dest='levels', default=[1, 10], nargs=2, type=int)
+
+	import multi_task
+	multi_task.add_task_opts(_p)
 
 	return _p.parse_args()
 
