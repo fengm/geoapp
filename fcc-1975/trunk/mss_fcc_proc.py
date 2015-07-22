@@ -13,52 +13,36 @@ def process_mss(f_inp, d_out):
 	import file_unzip
 
 	with file_unzip.file_unzip() as _zip:
-		_d_out = _zip.generate_file('out')
-		mod_mss_fcc.mss_fcc(f_inp, _d_out, _zip)
-
 		import config
-		if not config.cfg.getboolean('conf', 'debug'):
-			# clear the folder
-			import os
-			for _f in os.listdir(_d_out):
-				_p = _f.split('_')[-1]
-				if _p not in ['dat.tif', 'err.tif', 'txt.tree', 'txt.names', 'txt.data']:
-					logging.info('clean file: %s' % os.path.join(_d_out, _f))
-					try:
-						os.remove(os.path.join(_d_out, _f))
-					except Exception:
-						pass
-
-		file_unzip.compress_folder(_d_out, d_out, ['.txt', '.tmp', '.cases', '.data'])
-
-def process_file(f_inp, d_out):
-	import config
-
-	if config.cfg.getboolean('conf', 'debug'):
-		process_mss(f_inp, d_out)
-		return
-
-	try:
-		process_mss(f_inp, d_out)
-	except KeyboardInterrupt, err:
-		print '\n\n* User stopped the program'
-		raise err
-	except Exception, err:
-		import traceback
-
-		logging.error(traceback.format_exc())
-		logging.error(str(err))
-
-		print '\n\n* Error:', err
+		if config.cfg.getboolean('conf', 'cache_output'):
+			mod_mss_fcc.mss_fcc(f_inp, d_out, _zip)
+		else:
+			_d_out = _zip.generate_file('out')
+			mod_mss_fcc.mss_fcc(f_inp, _d_out, _zip)
+			file_unzip.compress_folder(_d_out, d_out, [])
 
 def main():
 	_opts = _init_env()
-	del _opts
 
-	_f_inp = '/data/glcf-nx-002/data/PALSAR/fcc_1975/sr/test/ndvi_6/p026r039/p026r039_com.img.gz'
-	_d_out = '/data/glcf-nx-002/data/PALSAR/fcc_1975/sr/test/forest_6/test1'
+	# _tile = 'p026r039'
+	# _tile = 'p240r078'
 
-	process_file(_f_inp, _d_out)
+	# _f_inp = '/data/glcf-nx-002/data/PALSAR/fcc_1975/sr/test/ndvi_6/%s/%s_com.img.gz' % (_tile, _tile)
+	# _d_out = '/data/glcf-nx-002/data/PALSAR/fcc_1975/sr/test/forest_6/test_%s' % _tile
+
+	import multi_task
+	import os
+
+	if _opts.input.endswith('.txt'):
+		_fs = multi_task.load_from_list(_opts.input, _opts)
+	else:
+		_fs = [_opts.input]
+
+	_ps = []
+	for _f in _fs:
+		_ps.append((_f, os.path.join(_opts.output, os.path.basename(_f).split('.')[0])))
+
+	multi_task.Pool(process_mss, _ps, _opts.task_num).run()
 
 def _usage():
 	import argparse
@@ -67,6 +51,12 @@ def _usage():
 	_p.add_argument('--logging', dest='logging')
 	_p.add_argument('--config', dest='config')
 	_p.add_argument('--temp', dest='temp')
+
+	_p.add_argument('-i', '--input', dest='input', required=True)
+	_p.add_argument('-o', '--output', dest='output', required=True)
+
+	import multi_task
+	multi_task.add_task_opts(_p)
 
 	return _p.parse_args()
 
