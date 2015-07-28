@@ -10,7 +10,7 @@ class connect:
 
 	def __init__(self):
 		import pymongo
-		self._conf = pymongo.MongoClient('129.2.12.64', 27017)
+		self._con = pymongo.MongoClient('129.2.12.64', 27017)
 
 	def __enter__(self):
 		return self._con

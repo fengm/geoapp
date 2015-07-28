@@ -6,6 +6,8 @@ Create: 2015-07-21 17:32:47
 Description:
 '''
 
+import logging
+
 class tiles:
 
 	def __init__(self):
@@ -138,14 +140,41 @@ class band:
 
 		return _cs
 
-	def make(self, bnd, f_clr, f_out):
-		if len(self.bnd) == 1:
-			_bnd = self.bnd[0].read_block(bnd)
-			if _bnd == None:
-				return
+	def _interp_colors(self, cs, v_non, v_val, scale=100):
+		_c1 = cs[v_non]
+		_c2 = cs[v_val]
 
-			self._save(_bnd, self._load_color(f_clr) if f_clr else self._color(self.color), f_out)
-			# _bnd.save(f_out, driver='GTIFF', color_table=self.color)
+		_ss = [(_c2[i] - _c1[i]) / float(scale) for i in xrange(len(_c1))]
+		_cs = {}
+
+		for i in xrange(scale + 1):
+			_cs[i] = [int(_c1[_b] + (i * _ss[_b]))  for _b in xrange(len(_c1))]
+			# print i, _cs[i]
+
+		return _cs
+
+	def _scale_band(self, bnd, div):
+		import geo_raster_c as ge
+		import math
+
+		_geo = (lambda x: [x[0], x[1] / div, x[2] / div, x[3], x[4] / div, x[5] / div])(bnd.geo_transform)
+
+		return ge.geo_band_info(_geo,
+				int(math.ceil(bnd.width * float(div))),
+				int(math.ceil(bnd.height * float(div))),
+				bnd.proj)
+
+	def _load_band(self, bnd):
+		if len(self.bnd) == 1:
+			return [self.bnd[0].read_block(bnd)]
+		else:
+			return [self.bnd[_b].read_block(bnd) for _b in xrange(len(self.bnd))]
+
+	def _save_band(self, bnd, cs, f_out):
+		if len(bnd) == 1:
+			if bnd[0] == None:
+				return
+			self._save(bnd[0], cs, f_out)
 		else:
 			from osgeo import gdal
 			_img = gdal.GetDriverByName('PNG').Create(f_out, bnd.width,\
@@ -156,7 +185,26 @@ class band:
 
 			_img.flush()
 
-def make_tile(f, lev, num, col, row, f_clr, d_out):
+	def make(self, bnd, f_clr, f_out):
+		_cs = self._load_color(f_clr) if f_clr else self._color(self.color)
+		self._save_band(self._load_band(bnd), _cs, f_out)
+
+	def make_perc(self, bnd, val, f_clr, f_out):
+		import agg_band
+
+		_slc = 5
+		_bds = self._load_band(self._scale_band(bnd, _slc))
+
+		_bnd = []
+		for _b in _bds:
+			if _b == None:
+				continue
+			_bnd.append(agg_band.perc(_b, bnd, val[0]))
+
+		_cs = self._interp_colors(self._load_color(f_clr) if f_clr else self._color(self.color), val[1], val[0])
+		self._save_band(_bnd, _cs, f_out)
+
+def make_tile(f, lev, num, col, row, percent, f_clr, d_out):
 	import file_unzip
 	import os
 
@@ -171,7 +219,10 @@ def make_tile(f, lev, num, col, row, f_clr, d_out):
 		if os.path.exists(_f) and os.path.getsize(_f) > 0:
 			return
 
-		band(f, _zip).make(tiles().extent(lev, col, row), f_clr, _f)
+		if percent != None:
+			band(f, _zip).make_perc(tiles().extent(lev, col, row), percent, f_clr, _f)
+		else:
+			band(f, _zip).make(tiles().extent(lev, col, row), f_clr, _f)
 
 def main():
 	_opts = _init_env()
@@ -189,33 +240,36 @@ def main():
 	with file_unzip.file_unzip() as _zip:
 		# detect the extent of input file
 		_ext = load_shp(_f_inp) if _opts.input.endswith('.shp') else load_img(_f_inp, _zip)
+		logging.info('detected extent %s' % str(_ext))
 		print 'detected extent', _ext
 
 		_ps = []
 		for _lev in xrange(_opts.levels[0], _opts.levels[1]+1):
 			print ' - checking level', _lev
 			for _lev, _num, _col, _row in tiles().list(_lev, _ext):
-				_ps.append((_f_inp, _lev, _num, _col, _row, _f_clr, _d_out))
+				_ps.append((_f_inp, _lev, _num, _col, _row, _opts.percent, _f_clr, _d_out))
 
+		logging.info('found %s task' % len(_ps))
 		print 'found %s tasks' % len(_ps)
+
+		print 'write map.html'
+		if _opts.instance_pos == 0:
+			import geo_raster_c as ge
+			_ext_geo = _ext.to_polygon().segment_ratio(30).project_to(ge.proj_from_epsg()).extent()
+
+			_f_out = os.path.join(_d_out, 'map.html')
+			with open(config.cfg.get('conf', 'openlayers_temp'), 'r') as _fi, open(_f_out, 'w') as _fo:
+				_fo.write(_fi.read() % {
+						'title': os.path.basename(_f_inp),
+						'xmin': _ext_geo.minx, 'xmax': _ext_geo.maxx,
+						'ymin': _ext_geo.miny, 'ymax': _ext_geo.maxy,
+						'zmin': _opts.levels[0], 'zmax': _opts.levels[1]
+						})
 
 		import multi_task
 		multi_task.Pool(make_tile,
 				[_ps[i] for i in xrange(_opts.instance_pos, len(_ps), _opts.instance_num)],
-				_opts.task_num, False).run()
-
-		import geo_raster_c as ge
-		_ext_geo = _ext.to_polygon().segment_ratio(30).project_to(ge.proj_from_epsg()).extent()
-
-		print 'write map.html'
-		_f_out = os.path.join(_d_out, 'map.html')
-		with open(config.cfg.get('conf', 'openlayers_temp'), 'r') as _fi, open(_f_out, 'w') as _fo:
-			_fo.write(_fi.read() % {
-					'title': os.path.basename(_f_inp),
-					'xmin': _ext_geo.minx, 'xmax': _ext_geo.maxx,
-					'ymin': _ext_geo.miny, 'ymax': _ext_geo.maxy,
-					'zmin': _opts.levels[0], 'zmax': _opts.levels[1]
-					})
+				_opts.task_num, True).run()
 
 def _usage():
 	import argparse
@@ -228,6 +282,7 @@ def _usage():
 	_p.add_argument('-i', '--input', dest='input', required=True)
 	_p.add_argument('-o', '--output', dest='output', required=True)
 	_p.add_argument('-c', '--color', dest='color')
+	_p.add_argument('-p', '--percent', dest='percent', default=None, type=int, nargs=2, help='target type, background type')
 	_p.add_argument('-l', '--levels', dest='levels', default=[1, 10], nargs=2, type=int)
 
 	import multi_task
