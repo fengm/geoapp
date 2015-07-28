@@ -1,0 +1,1 @@
+gfortran -g -ffixed-line-length-132 procmss.f -o procmss -I/fs/glcf/system/x86_64_linux26/usr/stow/gdaps-env/stow/HDF4.2r0/include/ -L/fs/glcf/system/x86_64_linux26/usr/stow/gdaps-env/stow/HDF4.2r0/lib -lmfhdf -ldf -ljpeg -lz 

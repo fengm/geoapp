@@ -1,0 +1,309 @@
+#!/usr/local/bin/perl
+
+use Cwd;
+
+$working_dir = "/export2/data/";
+sub usage{
+
+    die "usage:\n\ngenmsssr <input file>\n";
+
+
+}
+sub cmdexec{
+    
+    $cmd = shift;
+    print "$cmd\n";
+    system ($cmd);
+
+}
+
+sub jdoy{
+    my $mm = shift;
+    my $dd = shift;
+    my $yyyy = shift; 
+    
+    my  $nm, $im;
+    my $st = -1;
+    my @ndays = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31);
+
+  if ( ($yyyy%4 == 0) || (($yyyy%400 == 0) && ($yyyy%100 != 0) )){
+      $ndays[1] = 29; 
+      print "Its a leap year: $yyyy.\n";
+  }
+    if ($mm == 0){
+	if ($dd <= 0) {
+	    die("Error in input julian date: $dd, $yyyy");
+	}else{
+	    for ($im=0; (($im<12)&&($dd>0)); $im++){
+		$dd -= $ndays[$im];
+	    }
+	    if (($im > 12) || (($im == 12) && ($dd > 0))) {
+		die( "Error in input julian date: $dd $yyyy\n");
+	    }else{
+		$mm = $im;
+		$dd += $ndays[$mm - 1];
+		$st = 1;
+	    }
+	}
+	
+    }else{
+	if (($mm <= 0) || ($dd <= 0)) {
+	    die( "Error in input date: $mm, $dd, $yyyy");
+	}else{
+	    $nm = $mm - 1;
+	    for ($im=0; $im<$nm; $im++){
+		$dd += $ndays[$im];
+	    }
+	    $mm = 0;
+	    $st = 1;
+	}
+    }
+    if ($dd < 100) {
+
+	$dd = "0$dd";
+    }
+
+    return $dd;
+}
+
+sub genInputFile{
+
+    $dirname = shift;
+    print "dirname: $dirname\n";
+    $metadata_file = `ls *MTL.txt`;
+    chomp $metadata_file;
+    $in_file = $dirname . "_param.txt";
+    print "input file: $in_file\n";
+
+    open (OP,">>$in_file") || die "ERR: $!\n";
+    
+    `ls -d *.TIF > $in_file`;
+    `grep -a "RADIANCE_MAXIMUM_BAND" $metadata_file | awk '{print \$3}' >> $in_file`;
+    `grep -a "RADIANCE_MINIMUM_BAND" $metadata_file | awk '{print \$3}' >>$in_file`;
+    `grep -a "QUANTIZE_CAL_MAX_BAND" $metadata_file  | awk '{print \$3}' >>$in_file`;
+    `grep -a "QUANTIZE_CAL_MIN_BAND" $metadata_file  | awk '{print \$3}' >>$in_file`;
+    $rows= `grep -a "REFLECTIVE_LINES" $metadata_file | awk '{print \$3}'`;
+    $cols=`grep -a "REFLECTIVE_SAMPLES" $metadata_file | awk '{print \$3}'`;
+    chomp $rows;
+    chomp $cols;
+
+    print "rows: [$rows]\n";
+    if ($rows eq ""){
+	
+	close(OP);
+	print "ERR: Cannot process metadata file.\n";
+	`rm -rf $in_file`;
+	return -1
+    }
+	
+    print OP "$rows $cols\n";
+    $sun_ele =`grep -a "SUN_ELEVATION" $metadata_file | awk '{print 90.-\$3}'`;
+    $sun_azim=`grep -a "SUN_AZIMUTH" $metadata_file | awk '{print \$3}'`;
+    chomp $sun_ele;
+    chomp $sun_azim;
+    print OP "$sun_ele $sun_azim\n";
+    $time=`grep -a "SCENE_CENTER_TIME" $metadata_file | awk '{print \$3}' | awk -F : '{print \$1+\$2/60}'`;
+    chomp $time;
+    print OP "$time\n";
+    
+#latitude and longitude
+
+    $ullat = `grep -a "CORNER_UL_LAT_PRODUCT" $metadata_file | awk '{print \$3}'`;
+    chomp $ullat;
+    $ullon = `grep -a "CORNER_UL_LON_PRODUCT" $metadata_file | awk '{print \$3}'`;
+    chomp $ullon;
+    $urlat = `grep -a "CORNER_UR_LAT_PRODUCT" $metadata_file | awk '{print \$3}'`;
+    chomp $urlat;
+    $urlon = `grep -a "CORNER_UR_LON_PRODUCT" $metadata_file | awk '{print \$3}'`;
+    chomp $urlon;
+    $lllat = `grep -a "CORNER_LL_LAT_PRODUCT" $metadata_file | awk '{print \$3}'`;
+    chomp $lllat;
+    $lllon = `grep -a "CORNER_LL_LON_PRODUCT" $metadata_file | awk '{print \$3}'`;
+    chomp $lllon; 
+    $lrlat = `grep -a "CORNER_LR_LAT_PRODUCT" $metadata_file | awk '{print \$3}'`;
+    chomp $lrlat;  
+    $lrlon = `grep -a "CORNER_LR_LON_PRODUCT" $metadata_file | awk '{print \$3}'`;
+    chomp $lrlon;
+    
+    print OP "$ullat $ullon\n";
+    print OP "$urlat $urlon\n";
+    print OP "$lllat $lllon\n";
+    print OP "$lrlat $lrlon\n";
+    
+    
+    $date = `grep -a "DATE_ACQUIRED" $metadata_file | awk '{print \$3}'`;
+    chomp $date;
+    print "Date ==> $date\n";
+    $year=`echo $date | awk -F - '{print \$1}'`;
+    chomp $year;
+    $yy=`echo $year | cut -c 3-4`;
+    #echo $yy                                                                                                                                                                         
+    $month=`echo $date | awk -F - '{print \$2}'`;
+    $day=`echo $date | awk -F - '{print \$3}'`;
+    $doy = jdoy($month, $day, $year);
+    chomp $doy;
+    print OP "$doy\n";
+    if ($year < 1978){
+	`cp  $ENV{'ANC_PATH'}/EP_TOMS/ozone_1978/TOMS_1978$doy.hdf .`;
+    }else{
+	`cp  $ENV{'ANC_PATH'}/EP_TOMS/ozone_$year/TOMS_$year$doy.hdf .`;
+    }
+    print OP "TOMS_1978$doy.hdf\n";
+    `cp $ENV{'ANC_PATH'}/REANALYSIS/RE_$year/REANALYSIS_$year$doy.hdf .`;
+    print OP "REANALYSIS_$year$doy.hdf\n";
+    `cp $ENV{'ANC_PATH'}/CMGDEM.hdf .`;
+    print OP "CMGDEM.hdf\n";
+    close (OP);
+
+    return 0;
+}
+
+sub genInputFile2{
+
+    $dirname = shift;
+    $metadata_file = `ls *MTL.txt`;
+    chomp $metadata_file;
+    $in_file = $dirname . "_param.txt";
+    open (OP,">>$in_file") || die "ERR: $!\n";
+    
+    `ls -d *.TIF > $in_file`;
+
+    `grep -a "LMAX" $metadata_file | grep -v QCAL | awk '{print \$3}' >> $in_file`;
+    `grep -a "LMIN" $metadata_file | grep -v QCAL | awk '{print \$3}' >>$in_file`;
+    `grep -a "QCALMAX" $metadata_file  | awk '{print \$3}' >>$in_file`;
+    `grep -a "QCALMIN" $metadata_file  | awk '{print \$3}' >>$in_file`;
+
+    $rows= `grep -a "PRODUCT_LINES_REF" $metadata_file | awk '{print \$3}'`;
+    $cols=`grep -a "PRODUCT_SAMPLES_REF" $metadata_file | awk '{print \$3}'`;
+    chomp $rows;
+    chomp $cols;
+
+    print "rows2: [$rows]\n";
+    if ($rows eq ""){
+	
+	close(OP);
+	`rm -rf $in_file`;
+	return -1
+    }
+	
+    print OP "$rows $cols\n";
+    $sun_ele =`grep -a "SUN_ELEVATION" $metadata_file | awk '{print 90.-\$3}'`;
+    $sun_azim=`grep -a "SUN_AZIMUTH" $metadata_file | awk '{print \$3}'`;
+    chomp $sun_ele;
+    chomp $sun_azim;
+    print OP "$sun_ele $sun_azim\n";
+    $time=`grep -a "SCENE_CENTER_SCAN_TIME" $metadata_file | awk '{print \$3}' | awk -F : '{print \$1+\$2/60}'`;
+    chomp $time;
+    print OP "$time\n";
+    
+#latitude and longitude
+
+    $ullat = `grep -a "PRODUCT_UL_CORNER_LAT" $metadata_file | awk '{print \$3}'`;
+    chomp $ullat;
+    $ullon = `grep -a "PRODUCT_UL_CORNER_LON" $metadata_file | awk '{print \$3}'`;
+    chomp $ullon;
+    $urlat = `grep -a "PRODUCT_UR_CORNER_LAT" $metadata_file | awk '{print \$3}'`;
+    chomp $urlat;
+    $urlon = `grep -a "PRODUCT_UR_CORNER_LON" $metadata_file | awk '{print \$3}'`;
+    chomp $urlon;
+    $lllat = `grep -a "PRODUCT_LL_CORNER_LAT" $metadata_file | awk '{print \$3}'`;
+    chomp $lllat;
+    $lllon = `grep -a "PRODUCT_LL_CORNER_LON" $metadata_file | awk '{print \$3}'`;
+    chomp $lllon; 
+    $lrlat = `grep -a "PRODUCT_LR_CORNER_LAT" $metadata_file | awk '{print \$3}'`;
+    chomp $lrlat;  
+    $lrlon = `grep -a "PRODUCT_LR_CORNER_LON" $metadata_file | awk '{print \$3}'`;
+    chomp $lrlon;
+    
+    print OP "$ullat $ullon\n";
+    print OP "$urlat $urlon\n";
+    print OP "$lllat $lllon\n";
+    print OP "$lrlat $lrlon\n";
+    
+    
+    $date = `grep -a "ACQUISITION_DATE" $metadata_file | awk '{print \$3}'`;
+    chomp $date;
+    print "Date ==> $date\n";
+    $year=`echo $date | awk -F - '{print \$1}'`;
+    chomp $year;
+    $yy=`echo $year | cut -c 3-4`;
+    #echo $yy                                                                                                                                                                         
+    $month=`echo $date | awk -F - '{print \$2}'`;
+    $day=`echo $date | awk -F - '{print \$3}'`;
+    $doy = jdoy($month, $day, $year);
+    chomp $doy;
+    print OP "$doy\n";
+    if ($year < 1978){
+	`cp  $ENV{'ANC_PATH'}/EP_TOMS/ozone_1978/TOMS_1978$doy.hdf .`;
+    }else{
+	`cp  $ENV{'ANC_PATH'}/EP_TOMS/ozone_$year/TOMS_$year$doy.hdf .`;
+    }
+    print OP "TOMS_1978$doy.hdf\n";
+    `cp $ENV{'ANC_PATH'}/REANALYSIS/RE_$year/REANALYSIS_$year$doy.hdf .`;
+    print OP "REANALYSIS_$year$doy.hdf\n";
+    `cp $ENV{'ANC_PATH'}/CMGDEM.hdf .`;
+    print OP "CMGDEM.hdf\n";
+    close (OP);
+
+    return 0;
+}
+
+#main starts here
+
+$input_file = shift;
+#$finalpath = "/data/glcf-nx-002/data/MSS.SR/OC";
+$finalpath = "/data/glcf-nx-002/data/PALSAR/fcc_1975/src/procmss_f/test";
+
+
+if ($input_file eq ''){ usage();}
+
+open(IN,$input_file)|| die "ERR: $!\n";
+
+while ($line = <IN>){
+
+    chomp $line;
+    @tmparr = split ('/',$line);
+    print "line: @tmparr\n";
+    @tmparr = split(/\./, $tmparr[$#tmparr]);
+    print "line: @tmparr\n";
+    $destpath = $working_dir . "/$tmparr[0]";
+    $finalDirname = $tmparr[0];
+    
+    #Craete temp directory
+    print "Create temp directory ... \n";
+    cmdexec("mkdir $destpath");
+
+    #Untar 
+    print "Untar file to: $destpath\n";
+    cmdexec("tar -xf $line -C $destpath");
+
+#    print "Unzipping band files ..\n";
+#    cmdexec("gzip -d $destpath/*.gz");
+
+    chdir ($destpath);
+
+    print "Generating input parameter file\n";
+    print "what is ============> $finalDirname\n";
+    if (genInputFile($finalDirname) == -1 ){
+	
+	print "Cannot process metadata file\n";
+	genInputFile2($finalDirname);
+	
+
+	
+    }
+    
+    print "Generating MSS Surface Reflectance\n";
+    cmdexec("/data/glcf-nx-002/data/PALSAR/fcc_1975/src/procmss_f/procmss < $finalDirname" . "_param.txt");
+    
+    cmdexec("mkdir $finalpath/$finalDirname.SR");
+    
+    print "Compressing output HDF file ...\n";
+    cmdexec("gzip correcteddata.hdf");
+
+    print "Copying file over ..\n";
+    cmdexec("cp correcteddata.hdf.gz $finalpath/$finalDirname.SR/$finalDirname.SR.hdf.gz");
+    
+    chdir ("/tmp");
+    cmdexec("rm -rf $destpath");
+}
